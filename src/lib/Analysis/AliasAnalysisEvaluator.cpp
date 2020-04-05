@@ -9,6 +9,7 @@
 
 #include "llvm/Analysis/AliasAnalysisEvaluator.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -16,6 +17,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
@@ -23,11 +25,24 @@
 #include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
+#define DEBUG_TYPE "aa-eval"
+
+STATISTIC(NO_ALIAS_COUNT, "Number of no alias queries");
+STATISTIC(MAY_ALIAS_COUNT, "Number of may alias queries");
+STATISTIC(PARTIAL_ALIAS_COUNT, "Number of partial alias queries");
+STATISTIC(MUST_ALIAS_COUNT, "Number of must alias queries");
+STATISTIC(NUM_REAL_PREDICATES, "Number of valid no alias predicates kept");
+STATISTIC(NUM_UNIQUE_PREDICATES, "Number of unique no alias predicates remaining");
+STATISTIC(NUM_UNIQUE_USEFUL_PREDICATES, "Number of useful unique no alias predicates remaining");
+STATISTIC(FULL_EXPRS_REM,
+          "Number of full expressions that still generate predicates");
+
 static cl::opt<bool> PrintAll("print-all-alias-modref-info", cl::ReallyHidden);
 
 static cl::opt<bool> PrintNoAlias("print-no-aliases", cl::ReallyHidden);
 static cl::opt<bool> PrintMayAlias("print-may-aliases", cl::ReallyHidden);
-static cl::opt<bool> PrintPartialAlias("print-partial-aliases", cl::ReallyHidden);
+static cl::opt<bool> PrintPartialAlias("print-partial-aliases",
+                                       cl::ReallyHidden);
 static cl::opt<bool> PrintMustAlias("print-must-aliases", cl::ReallyHidden);
 
 static cl::opt<bool> PrintNoModRef("print-no-modref", cl::ReallyHidden);
@@ -40,6 +55,10 @@ static cl::opt<bool> PrintMustMod("print-mustmod", cl::ReallyHidden);
 static cl::opt<bool> PrintMustModRef("print-mustmodref", cl::ReallyHidden);
 
 static cl::opt<bool> EvalAAMD("evaluate-aa-metadata", cl::ReallyHidden);
+
+static cl::opt<bool>
+    PrintAAEval("print-aa-eval", cl::init(false), cl::Hidden,
+                cl::desc("Print Alias Analysis Evaluator results"));
 
 static void PrintResults(AliasResult AR, bool P, const Value *V1,
                          const Value *V2, const Module *M) {
@@ -82,13 +101,20 @@ static inline void PrintLoadStoreResults(AliasResult AR, bool P,
 }
 
 static inline bool isInterestingPointer(Value *V) {
-  return V->getType()->isPointerTy()
-      && !isa<ConstantPointerNull>(V);
+  return V->getType()->isPointerTy() && !isa<ConstantPointerNull>(V);
 }
 
 PreservedAnalyses AAEvaluator::run(Function &F, FunctionAnalysisManager &AM) {
   runInternal(F, AM.getResult<AAManager>(F));
   return PreservedAnalyses::all();
+}
+
+static Value *getValuefromMDValue(Value *v) {
+  auto *mdn = cast<MetadataAsValue>(v)->getMetadata();
+  if (auto *val = dyn_cast<ValueAsMetadata>(mdn)) {
+    return val->getValue();
+  }
+  return nullptr;
 }
 
 void AAEvaluator::runInternal(Function &F, AAResults &AA) {
@@ -102,9 +128,10 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
   SetVector<Value *> Stores;
 
   for (auto &I : F.args())
-    if (I.getType()->isPointerTy())    // Add all pointer arguments.
+    if (I.getType()->isPointerTy()) // Add all pointer arguments.
       Pointers.insert(&I);
 
+  bool keepTopLevel = true, isPrevNoalias = false;
   for (inst_iterator I = inst_begin(F), E = inst_end(F); I != E; ++I) {
     if (I->getType()->isPointerTy()) // Add all pointer instructions.
       Pointers.insert(&*I);
@@ -130,7 +157,48 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
         if (isInterestingPointer(*OI))
           Pointers.insert(*OI);
     }
+
+// Look for intrinsics
+#define CALL cast<CallInst>(*I)
+    if (isa<CallInst>(*I) &&
+        CALL.getIntrinsicID() == Intrinsic::unseq_noalias) {
+      isPrevNoalias = true;
+
+      // check if the predicate has any non-readonly fn calls assoc with it
+      bool keepPred = true;
+      for (int i = 3; i < CALL.getNumArgOperands(); i++) {
+        Value *val = getValuefromMDValue(CALL.getArgOperand(i));
+        if (!val) {
+          llvm::errs() << "Null function value in MDNode\n";
+          continue;
+        }
+
+        if (Function *fn = dyn_cast<Function>(val)) {
+          keepPred &= fn->onlyReadsMemory();
+        }
+      }
+
+      keepTopLevel &= keepPred;
+      if (keepPred) {
+        numPreds++;
+
+	if (llvm::ConstantInt* CI = dyn_cast<llvm::ConstantInt>(CALL.getArgOperand(0))) {
+	  uniquePredicateIds.insert(CI->getZExtValue());
+
+	  if (getValuefromMDValue(CALL.getArgOperand(1)) && getValuefromMDValue(CALL.getArgOperand(2))) {
+            uniqueUsefulPredicateIds.insert(CI->getZExtValue());
+	  }
+        }
+      }
+    } else {
+      if (isPrevNoalias)
+        fullExprs += keepTopLevel;
+      isPrevNoalias = false;
+      keepTopLevel = true;
+    }
   }
+  if (isPrevNoalias)
+    fullExprs += keepTopLevel;
 
   if (PrintAll || PrintNoAlias || PrintMayAlias || PrintPartialAlias ||
       PrintMustAlias || PrintNoModRef || PrintMod || PrintRef || PrintModRef)
@@ -189,7 +257,8 @@ void AAEvaluator::runInternal(Function &F, AAResults &AA) {
           ++MayAliasCount;
           break;
         case PartialAlias:
-          PrintLoadStoreResults(AR, PrintPartialAlias, Load, Store, F.getParent());
+          PrintLoadStoreResults(AR, PrintPartialAlias, Load, Store,
+                                F.getParent());
           ++PartialAliasCount;
           break;
         case MustAlias:
@@ -335,60 +404,74 @@ AAEvaluator::~AAEvaluator() {
   if (FunctionCount == 0)
     return;
 
-  int64_t AliasSum =
-      NoAliasCount + MayAliasCount + PartialAliasCount + MustAliasCount;
-  errs() << "===== Alias Analysis Evaluator Report =====\n";
-  if (AliasSum == 0) {
-    errs() << "  Alias Analysis Evaluator Summary: No pointers!\n";
-  } else {
-    errs() << "  " << AliasSum << " Total Alias Queries Performed\n";
-    errs() << "  " << NoAliasCount << " no alias responses ";
-    PrintPercent(NoAliasCount, AliasSum);
-    errs() << "  " << MayAliasCount << " may alias responses ";
-    PrintPercent(MayAliasCount, AliasSum);
-    errs() << "  " << PartialAliasCount << " partial alias responses ";
-    PrintPercent(PartialAliasCount, AliasSum);
-    errs() << "  " << MustAliasCount << " must alias responses ";
-    PrintPercent(MustAliasCount, AliasSum);
-    errs() << "  Alias Analysis Evaluator Pointer Alias Summary: "
-           << NoAliasCount * 100 / AliasSum << "%/"
-           << MayAliasCount * 100 / AliasSum << "%/"
-           << PartialAliasCount * 100 / AliasSum << "%/"
-           << MustAliasCount * 100 / AliasSum << "%\n";
+  if (PrintAAEval) {
+    int64_t AliasSum =
+        NoAliasCount + MayAliasCount + PartialAliasCount + MustAliasCount;
+    errs() << "===== Alias Analysis Evaluator Report =====\n";
+    if (AliasSum == 0) {
+      errs() << "  Alias Analysis Evaluator Summary: No pointers!\n";
+    } else {
+      errs() << "  " << AliasSum << " Total Alias Queries Performed\n";
+      errs() << "  " << NoAliasCount << " no alias responses ";
+      PrintPercent(NoAliasCount, AliasSum);
+      errs() << "  " << MayAliasCount << " may alias responses ";
+      PrintPercent(MayAliasCount, AliasSum);
+      errs() << "  " << PartialAliasCount << " partial alias responses ";
+      PrintPercent(PartialAliasCount, AliasSum);
+      errs() << "  " << MustAliasCount << " must alias responses ";
+      PrintPercent(MustAliasCount, AliasSum);
+      errs() << "  Alias Analysis Evaluator Pointer Alias Summary: "
+             << NoAliasCount * 100 / AliasSum << "%/"
+             << MayAliasCount * 100 / AliasSum << "%/"
+             << PartialAliasCount * 100 / AliasSum << "%/"
+             << MustAliasCount * 100 / AliasSum << "%\n";
+    }
   }
 
+  NO_ALIAS_COUNT = NoAliasCount;
+  MAY_ALIAS_COUNT = MayAliasCount;
+  PARTIAL_ALIAS_COUNT = PartialAliasCount;
+  MUST_ALIAS_COUNT = MustAliasCount;
+  NUM_REAL_PREDICATES = numPreds;
+  NUM_UNIQUE_PREDICATES = uniquePredicateIds.size();
+  NUM_UNIQUE_USEFUL_PREDICATES = uniqueUsefulPredicateIds.size();
+  FULL_EXPRS_REM = fullExprs;
+
   // Display the summary for mod/ref analysis
-  int64_t ModRefSum = NoModRefCount + RefCount + ModCount + ModRefCount +
-                      MustCount + MustRefCount + MustModCount + MustModRefCount;
-  if (ModRefSum == 0) {
-    errs() << "  Alias Analysis Mod/Ref Evaluator Summary: no "
-              "mod/ref!\n";
-  } else {
-    errs() << "  " << ModRefSum << " Total ModRef Queries Performed\n";
-    errs() << "  " << NoModRefCount << " no mod/ref responses ";
-    PrintPercent(NoModRefCount, ModRefSum);
-    errs() << "  " << ModCount << " mod responses ";
-    PrintPercent(ModCount, ModRefSum);
-    errs() << "  " << RefCount << " ref responses ";
-    PrintPercent(RefCount, ModRefSum);
-    errs() << "  " << ModRefCount << " mod & ref responses ";
-    PrintPercent(ModRefCount, ModRefSum);
-    errs() << "  " << MustCount << " must responses ";
-    PrintPercent(MustCount, ModRefSum);
-    errs() << "  " << MustModCount << " must mod responses ";
-    PrintPercent(MustModCount, ModRefSum);
-    errs() << "  " << MustRefCount << " must ref responses ";
-    PrintPercent(MustRefCount, ModRefSum);
-    errs() << "  " << MustModRefCount << " must mod & ref responses ";
-    PrintPercent(MustModRefCount, ModRefSum);
-    errs() << "  Alias Analysis Evaluator Mod/Ref Summary: "
-           << NoModRefCount * 100 / ModRefSum << "%/"
-           << ModCount * 100 / ModRefSum << "%/" << RefCount * 100 / ModRefSum
-           << "%/" << ModRefCount * 100 / ModRefSum << "%/"
-           << MustCount * 100 / ModRefSum << "%/"
-           << MustRefCount * 100 / ModRefSum << "%/"
-           << MustModCount * 100 / ModRefSum << "%/"
-           << MustModRefCount * 100 / ModRefSum << "%\n";
+  if (PrintAAEval) {
+    int64_t ModRefSum = NoModRefCount + RefCount + ModCount + ModRefCount +
+                        MustCount + MustRefCount + MustModCount +
+                        MustModRefCount;
+    if (ModRefSum == 0) {
+      errs() << "  Alias Analysis Mod/Ref Evaluator Summary: no "
+                "mod/ref!\n";
+    } else {
+      errs() << "  " << ModRefSum << " Total ModRef Queries Performed\n";
+      errs() << "  " << NoModRefCount << " no mod/ref responses ";
+      PrintPercent(NoModRefCount, ModRefSum);
+      errs() << "  " << ModCount << " mod responses ";
+      PrintPercent(ModCount, ModRefSum);
+      errs() << "  " << RefCount << " ref responses ";
+      PrintPercent(RefCount, ModRefSum);
+      errs() << "  " << ModRefCount << " mod & ref responses ";
+      PrintPercent(ModRefCount, ModRefSum);
+      errs() << "  " << MustCount << " must responses ";
+      PrintPercent(MustCount, ModRefSum);
+      errs() << "  " << MustModCount << " must mod responses ";
+      PrintPercent(MustModCount, ModRefSum);
+      errs() << "  " << MustRefCount << " must ref responses ";
+      PrintPercent(MustRefCount, ModRefSum);
+      errs() << "  " << MustModRefCount << " must mod & ref responses ";
+      PrintPercent(MustModRefCount, ModRefSum);
+      errs() << "  Alias Analysis Evaluator Mod/Ref Summary: "
+             << NoModRefCount * 100 / ModRefSum << "%/"
+             << ModCount * 100 / ModRefSum << "%/" << RefCount * 100 / ModRefSum
+             << "%/" << ModRefCount * 100 / ModRefSum << "%/"
+             << MustCount * 100 / ModRefSum << "%/"
+             << MustRefCount * 100 / ModRefSum << "%/"
+             << MustModCount * 100 / ModRefSum << "%/"
+             << MustModRefCount * 100 / ModRefSum << "%\n";
+    }
   }
 }
 

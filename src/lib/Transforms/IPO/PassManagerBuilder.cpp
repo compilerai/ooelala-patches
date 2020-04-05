@@ -15,6 +15,7 @@
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm-c/Transforms/PassManagerBuilder.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AliasAnalysisEvaluator.h"
 #include "llvm/Analysis/BasicAliasAnalysis.h"
 #include "llvm/Analysis/CFLAndersAliasAnalysis.h"
 #include "llvm/Analysis/CFLSteensAliasAnalysis.h"
@@ -159,6 +160,10 @@ static cl::opt<bool> EnableGVNSink(
 static cl::opt<bool>
     EnableCHR("enable-chr", cl::init(true), cl::Hidden,
               cl::desc("Enable control height reduction optimization (CHR)"));
+
+static cl::opt<bool>
+    EnableAAEval("enable-aa-eval", cl::init(false), cl::Hidden,
+            cl::desc("Enable alias analysis evaluator pass at the end"));
 
 PassManagerBuilder::PassManagerBuilder() {
     OptLevel = 2;
@@ -751,6 +756,10 @@ void PassManagerBuilder::populateModulePassManager(
     MPM.add(createCanonicalizeAliasesPass());
     // Rename anon globals to be able to handle them in the summary
     MPM.add(createNameAnonGlobalPass());
+  }
+
+  if (EnableAAEval) {
+      MPM.add(createAAEvalPass());
   }
 }
 

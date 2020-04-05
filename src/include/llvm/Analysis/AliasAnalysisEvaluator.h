@@ -25,6 +25,8 @@
 #ifndef LLVM_ANALYSIS_ALIASANALYSISEVALUATOR_H
 #define LLVM_ANALYSIS_ALIASANALYSISEVALUATOR_H
 
+#include <unordered_set>
+
 #include "llvm/IR/Function.h"
 #include "llvm/IR/PassManager.h"
 
@@ -36,13 +38,16 @@ class AAEvaluator : public PassInfoMixin<AAEvaluator> {
   int64_t NoAliasCount, MayAliasCount, PartialAliasCount, MustAliasCount;
   int64_t NoModRefCount, ModCount, RefCount, ModRefCount;
   int64_t MustCount, MustRefCount, MustModCount, MustModRefCount;
+  int64_t numPreds, fullExprs;
+  std::unordered_set<int> uniquePredicateIds;
+  std::unordered_set<int> uniqueUsefulPredicateIds;
 
 public:
   AAEvaluator()
       : FunctionCount(), NoAliasCount(), MayAliasCount(), PartialAliasCount(),
         MustAliasCount(), NoModRefCount(), ModCount(), RefCount(),
         ModRefCount(), MustCount(), MustRefCount(), MustModCount(),
-        MustModRefCount() {}
+        MustModRefCount(), numPreds(), fullExprs() {}
   AAEvaluator(AAEvaluator &&Arg)
       : FunctionCount(Arg.FunctionCount), NoAliasCount(Arg.NoAliasCount),
         MayAliasCount(Arg.MayAliasCount),
@@ -51,7 +56,7 @@ public:
         ModCount(Arg.ModCount), RefCount(Arg.RefCount),
         ModRefCount(Arg.ModRefCount), MustCount(Arg.MustCount),
         MustRefCount(Arg.MustRefCount), MustModCount(Arg.MustModCount),
-        MustModRefCount(Arg.MustModRefCount) {
+        MustModRefCount(Arg.MustModRefCount), numPreds(0), fullExprs(0) {
     Arg.FunctionCount = 0;
   }
   ~AAEvaluator();
@@ -68,7 +73,6 @@ private:
 
 /// Create a wrapper of the above for the legacy pass manager.
 FunctionPass *createAAEvalPass();
-
 }
 
 #endif
