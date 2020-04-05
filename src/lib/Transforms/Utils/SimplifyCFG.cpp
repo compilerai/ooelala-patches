@@ -3907,6 +3907,7 @@ static bool removeEmptyCleanup(CleanupReturnInst *RI) {
     case Intrinsic::dbg_value:
     case Intrinsic::dbg_label:
     case Intrinsic::lifetime_end:
+    case Intrinsic::unseq_noalias:
       break;
     default:
       return false;

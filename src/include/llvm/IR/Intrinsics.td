@@ -421,6 +421,15 @@ def int_eh_recoverfp : Intrinsic<[llvm_ptr_ty],
                                  [llvm_ptr_ty, llvm_ptr_ty],
                                  [IntrNoMem]>;
 
+// Unsequenced no alias predicates - a pair of values as metadata
+let IntrProperties = [IntrNoMem, IntrSpeculatable] in {
+  def int_unseq_noalias : Intrinsic<[],
+                                    [llvm_i32_ty,
+                                     llvm_metadata_ty,
+                                     llvm_metadata_ty,
+                                     llvm_vararg_ty]>;
+}
+
 // Note: we treat stacksave/stackrestore as writemem because we don't otherwise
 // model their dependencies on allocas.
 def int_stacksave     : Intrinsic<[llvm_ptr_ty]>,

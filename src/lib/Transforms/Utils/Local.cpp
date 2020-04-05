@@ -348,6 +348,8 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
 ///
 bool llvm::isInstructionTriviallyDead(Instruction *I,
                                       const TargetLibraryInfo *TLI) {
+  if (isa<CallInst>(*I) && cast<CallInst>(*I).getIntrinsicID() == Intrinsic::unseq_noalias)
+    return false;
   if (!I->use_empty())
     return false;
   return wouldInstructionBeTriviallyDead(I, TLI);
@@ -355,6 +357,9 @@ bool llvm::isInstructionTriviallyDead(Instruction *I,
 
 bool llvm::wouldInstructionBeTriviallyDead(Instruction *I,
                                            const TargetLibraryInfo *TLI) {
+  if (isa<CallInst>(*I) && cast<CallInst>(*I).getIntrinsicID() == Intrinsic::unseq_noalias)
+      return false;
+
   if (I->isTerminator())
     return false;
 

@@ -79,6 +79,9 @@ void DemandedBitsWrapperPass::print(raw_ostream &OS, const Module *M) const {
 }
 
 static bool isAlwaysLive(Instruction *I) {
+  if (isa<CallInst>(*I) && cast<CallInst>(*I).getIntrinsicID() == Intrinsic::unseq_noalias)
+      return true;
+
   return I->isTerminator() || isa<DbgInfoIntrinsic>(I) || I->isEHPad() ||
          I->mayHaveSideEffects();
 }

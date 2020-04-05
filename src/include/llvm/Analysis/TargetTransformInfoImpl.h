@@ -177,6 +177,7 @@ public:
     case Intrinsic::coro_suspend:
     case Intrinsic::coro_param:
     case Intrinsic::coro_subfn_addr:
+    case Intrinsic::unseq_noalias:
       // These intrinsics don't actually represent code after lowering.
       return TTI::TCC_Free;
     }

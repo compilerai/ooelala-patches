@@ -409,6 +409,9 @@ void IntrinsicLowering::LowerIntrinsicCall(CallInst *CI) {
     break;
   }
 
+  case Intrinsic::unseq_noalias:
+    break;
+
   case Intrinsic::stacksave:
   case Intrinsic::stackrestore: {
     if (!Warned)
@@ -455,6 +458,7 @@ void IntrinsicLowering::LowerIntrinsicCall(CallInst *CI) {
     break;
   }
 
+  
   case Intrinsic::dbg_declare:
   case Intrinsic::dbg_label:
     break;    // Simply strip out debugging intrinsics

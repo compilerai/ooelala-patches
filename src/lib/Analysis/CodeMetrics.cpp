@@ -125,6 +125,11 @@ void CodeMetrics::analyzeBasicBlock(const BasicBlock *BB,
     if (EphValues.count(&I))
       continue;
 
+    /*
+    if (isa<CallInst>(I) && cast<CallInst>(I).getIntrinsicID() == Intrinsic::unseq_noalias)
+      continue;
+    */
+
     // Special handling for calls.
     if (isa<CallInst>(I) || isa<InvokeInst>(I)) {
       ImmutableCallSite CS(&I);
