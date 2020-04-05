@@ -36,6 +36,7 @@
 #include "llvm/Analysis/ScopedNoAliasAA.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
+#include "llvm/Analysis/UnsequencedAliasAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
@@ -673,6 +674,7 @@ INITIALIZE_PASS_DEPENDENCY(ObjCARCAAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(SCEVAAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScopedNoAliasAAWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TypeBasedAAWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(UnseqAAWrapperPass)
 INITIALIZE_PASS_END(AAResultsWrapperPass, "aa",
                     "Function Alias Analysis Results", false, true)
 
@@ -702,13 +704,17 @@ bool AAResultsWrapperPass::runOnFunction(Function &F) {
   // so that it can trump TBAA results when it proves MustAlias.
   // FIXME: TBAA should have an explicit mode to support this and then we
   // should reconsider the ordering here.
-  if (!DisableBasicAA)
+  if (!DisableBasicAA) {
     AAR->addAAResult(getAnalysis<BasicAAWrapperPass>().getResult());
+    AAR->addAAResult(getAnalysis<UnseqAAWrapperPass>().getResult());
+  }
 
   // Populate the results with the currently available AAs.
   if (auto *WrapperPass = getAnalysisIfAvailable<ScopedNoAliasAAWrapperPass>())
     AAR->addAAResult(WrapperPass->getResult());
   if (auto *WrapperPass = getAnalysisIfAvailable<TypeBasedAAWrapperPass>())
+    AAR->addAAResult(WrapperPass->getResult());
+  if (auto *WrapperPass = getAnalysisIfAvailable<UnseqAAWrapperPass>())
     AAR->addAAResult(WrapperPass->getResult());
   if (auto *WrapperPass =
           getAnalysisIfAvailable<objcarc::ObjCARCAAWrapperPass>())
@@ -735,6 +741,7 @@ bool AAResultsWrapperPass::runOnFunction(Function &F) {
 void AAResultsWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequired<BasicAAWrapperPass>();
+  AU.addRequired<UnseqAAWrapperPass>();
   AU.addRequired<TargetLibraryInfoWrapperPass>();
 
   // We also need to mark all the alias analysis passes we will potentially
@@ -748,6 +755,7 @@ void AAResultsWrapperPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addUsedIfAvailable<SCEVAAWrapperPass>();
   AU.addUsedIfAvailable<CFLAndersAAWrapperPass>();
   AU.addUsedIfAvailable<CFLSteensAAWrapperPass>();
+  AU.addUsedIfAvailable<UnseqAAWrapperPass>();
 }
 
 AAResults llvm::createLegacyPMAAResults(Pass &P, Function &F,
@@ -764,6 +772,8 @@ AAResults llvm::createLegacyPMAAResults(Pass &P, Function &F,
     AAR.addAAResult(WrapperPass->getResult());
   if (auto *WrapperPass = P.getAnalysisIfAvailable<TypeBasedAAWrapperPass>())
     AAR.addAAResult(WrapperPass->getResult());
+  if (auto *WrapperPass = P.getAnalysisIfAvailable<UnseqAAWrapperPass>())
+    AAR.addAAResult(WrapperPass->getResult());
   if (auto *WrapperPass =
           P.getAnalysisIfAvailable<objcarc::ObjCARCAAWrapperPass>())
     AAR.addAAResult(WrapperPass->getResult());
@@ -772,6 +782,8 @@ AAResults llvm::createLegacyPMAAResults(Pass &P, Function &F,
   if (auto *WrapperPass = P.getAnalysisIfAvailable<CFLAndersAAWrapperPass>())
     AAR.addAAResult(WrapperPass->getResult());
   if (auto *WrapperPass = P.getAnalysisIfAvailable<CFLSteensAAWrapperPass>())
+    AAR.addAAResult(WrapperPass->getResult());
+  if (auto *WrapperPass = P.getAnalysisIfAvailable<UnseqAAWrapperPass>())
     AAR.addAAResult(WrapperPass->getResult());
 
   return AAR;
@@ -812,6 +824,7 @@ void llvm::getAAResultsAnalysisUsage(AnalysisUsage &AU) {
   AU.addRequired<TargetLibraryInfoWrapperPass>();
   AU.addUsedIfAvailable<ScopedNoAliasAAWrapperPass>();
   AU.addUsedIfAvailable<TypeBasedAAWrapperPass>();
+  AU.addUsedIfAvailable<UnseqAAWrapperPass>();
   AU.addUsedIfAvailable<objcarc::ObjCARCAAWrapperPass>();
   AU.addUsedIfAvailable<GlobalsAAWrapperPass>();
   AU.addUsedIfAvailable<CFLAndersAAWrapperPass>();
