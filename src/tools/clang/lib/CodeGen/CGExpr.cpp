@@ -30,9 +30,11 @@
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
@@ -1219,7 +1221,7 @@ LValue CodeGenFunction::EmitCheckedLValue(const Expr *E, TypeCheckKind TCK) {
 /// type of the same size of the lvalue's type.  If the lvalue has a variable
 /// length type, this is not possible.
 ///
-LValue CodeGenFunction::EmitLValue(const Expr *E) {
+LValue CodeGenFunction::EmitLValueHelper(const Expr *E) {
   ApplyDebugLocation DL(*this, E);
   switch (E->getStmtClass()) {
   default:
@@ -1349,6 +1351,110 @@ LValue CodeGenFunction::EmitLValue(const Expr *E) {
     return EmitCoawaitLValue(cast<CoawaitExpr>(E));
   case Expr::CoyieldExprClass:
     return EmitCoyieldLValue(cast<CoyieldExpr>(E));
+  }
+}
+
+LValue CodeGenFunction::EmitLValue(const Expr *E) {
+  LValue retVal = EmitLValueHelper(E);
+  return (CGM.getExprLValueMap()[E] = retVal);
+}
+
+llvm::Value *getLValuePointer(LValue lval) {
+  if (lval.isSimple()) {
+    return lval.getPointer();
+  } else if (lval.isVectorElt()) {
+    return lval.getVectorPointer();
+  } else if (lval.isExtVectorElt()) {
+    return lval.getExtVectorPointer();
+  } else if (lval.isBitField()) {
+    return lval.getBitFieldPointer();
+  } else if (lval.isGlobalReg()) {
+    return lval.getGlobalReg();
+  } else
+    llvm_unreachable("Bad LValue");
+}
+
+llvm::Value *getRValueVal(RValue rval) {
+  if (rval.isScalar()) {
+    return rval.getScalarVal();
+  } else if (rval.isAggregate()) {
+    return rval.getAggregatePointer();
+  } else if (rval.isComplex()) {
+    llvm_unreachable("Complex Function Call RValue");
+  } else {
+    llvm_unreachable("Bad RValue");
+  }
+}
+
+llvm::Value *wrapValueinMD(llvm::Value *val, CodeGenModule &CGM) {
+  return llvm::MetadataAsValue::get(CGM.getLLVMContext(),
+                                    llvm::ValueAsMetadata::get(val));
+}
+
+void CodeGenFunction::EmitAliasCall(LOCN_TYPE loc) {
+  if (SanOpts.has(SanitizerKind::UnsequencedScalars) && CGM.hasPredicateMap() &&
+      CGM.checkEmitPredicates()) {
+    auto &predicateMap = CGM.getPredicateMap();
+
+    if (!predicateMap.count(loc))
+      return;
+
+    for (auto it = predicateMap[loc].begin(); it != predicateMap[loc].end();
+         it++) {
+      auto ValueFn = llvm::Intrinsic::getDeclaration(
+          &CGM.getModule(), llvm::Intrinsic::unseq_noalias);
+#define FILENAME CGM.getModule().getName().str()
+
+      LValue lval1 = CGM.getExprLValueMap()[(*it)[0]];
+      LValue lval2 = CGM.getExprLValueMap()[(*it)[1]];
+      if (lval1.isBitField() && lval2.isBitField()) {
+        llvm::errs() << "An alias predicate in " << FILENAME
+                     << "is between bit-fields\n";
+        continue;
+      }
+
+      llvm::Value *val1 = getLValuePointer(lval1);
+      llvm::Value *val2 = getLValuePointer(lval2);
+      if (!val1 || !val2) {
+        llvm::errs() << "An LValue in " << FILENAME << " is Null\n";
+        continue;
+      }
+
+      std::vector<llvm::Value *> ValueArgs;
+
+      // The first argument will be the unique ID of the intrinsic
+      llvm::Type *i32_type = llvm::IntegerType::getInt32Ty(getLLVMContext());
+      llvm::Value *uniqueIdValue = llvm::ConstantInt::get(i32_type, uniquePredicateCount++, false); 
+
+      ValueArgs.push_back(uniqueIdValue);
+      ValueArgs.push_back(wrapValueinMD(val1, CGM));
+      ValueArgs.push_back(wrapValueinMD(val2, CGM));
+
+      // Add the possibly interfering function calls
+      bool indirect = false;
+      for (int i = 2; i < it->size(); i++) {
+        llvm::Value *val = getRValueVal(CGM.getCallRValueMap()[(*it)[i]]);
+        if (!val || !isa<llvm::CallInst>(val)) {
+          llvm::errs() << "An RValue in " << FILENAME << " is not a Call\n";
+          indirect = true;
+          break;
+        }
+
+        val = cast<llvm::CallInst>(val)->getCalledValue()->stripPointerCasts();
+        ValueArgs.push_back(wrapValueinMD(val, CGM));
+      }
+
+      if (indirect) { // ignore predicdates with indirect call
+        continue;
+      }
+      EmitNounwindRuntimeCall(ValueFn, ValueArgs);
+    }
+
+    // Clear the maps on sequnece point
+    if (isa<Stmt>(loc) || isa<FullExpr>(loc)) {
+      CGM.getExprLValueMap().clear();
+      CGM.getCallRValueMap().clear();
+    }
   }
 }
 
@@ -2020,11 +2126,10 @@ void CodeGenFunction::EmitStoreThroughBitfieldLValue(RValue Src, LValue Dst,
       SrcVal = Builder.CreateShl(SrcVal, Info.Offset, "bf.shl");
 
     // Mask out the original value.
-    Val = Builder.CreateAnd(Val,
-                            ~llvm::APInt::getBitsSet(Info.StorageSize,
-                                                     Info.Offset,
-                                                     Info.Offset + Info.Size),
-                            "bf.clear");
+    Val = Builder.CreateAnd(
+        Val, ~llvm::APInt::getBitsSet(Info.StorageSize, Info.Offset,
+                                      Info.Offset + Info.Size),
+        "bf.clear");
 
     // Or together the unchanged values and the source value.
     SrcVal = Builder.CreateOr(Val, SrcVal, "bf.set");
@@ -3297,7 +3402,7 @@ static Address emitArraySubscriptGEP(CodeGenFunction &CGF, Address addr,
                                      QualType eltType, bool inbounds,
                                      bool signedIndices, SourceLocation loc,
                                      const llvm::Twine &name = "arrayidx") {
-  // All the indices except that last must be zero.
+// All the indices except that last must be zero.
 #ifndef NDEBUG
   for (auto idx : indices.drop_back())
     assert(isa<llvm::ConstantInt>(idx) &&
@@ -4315,8 +4420,8 @@ RValue CodeGenFunction::EmitRValueForField(LValue LV, const FieldDecl *FD,
 //                             Expression Emission
 //===--------------------------------------------------------------------===//
 
-RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
-                                     ReturnValueSlot ReturnValue) {
+RValue CodeGenFunction::EmitCallExprHelper(const CallExpr *E,
+                                           ReturnValueSlot ReturnValue) {
   // Builtins never have block type.
   if (E->getCallee()->getType()->isBlockPointerType())
     return EmitBlockCallExpr(E, ReturnValue);
@@ -4344,6 +4449,12 @@ RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
   }
 
   return EmitCall(E->getCallee()->getType(), callee, E, ReturnValue);
+}
+
+RValue CodeGenFunction::EmitCallExpr(const CallExpr *E,
+                                     ReturnValueSlot ReturnValue) {
+  RValue RV = EmitCallExprHelper(E, ReturnValue);
+  return (CGM.getCallRValueMap()[E] = RV);
 }
 
 /// Emit a CallExpr without considering whether it might be a subclass.

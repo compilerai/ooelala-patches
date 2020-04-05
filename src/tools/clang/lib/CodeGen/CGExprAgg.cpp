@@ -1439,7 +1439,7 @@ void AggExprEmitter::VisitInitListExpr(InitListExpr *E) {
     // Only initialize one field of a union. The field itself is
     // specified by the initializer list.
     if (!E->getInitializedFieldInUnion()) {
-      // Empty union; we have nothing to do.
+// Empty union; we have nothing to do.
 
 #ifndef NDEBUG
       // Make sure that it's really an empty and not a failure of
@@ -1746,7 +1746,7 @@ static void CheckAggExprForMemSetUse(AggValueSlot &Slot, const Expr *E,
 /// type.  The result is computed into DestPtr.  Note that if DestPtr is null,
 /// the value of the aggregate expression is not needed.  If VolatileDest is
 /// true, DestPtr cannot be 0.
-void CodeGenFunction::EmitAggExpr(const Expr *E, AggValueSlot Slot) {
+void CodeGenFunction::EmitAggExprHelper(const Expr *E, AggValueSlot Slot) {
   assert(E && hasAggregateEvaluationKind(E->getType()) &&
          "Invalid aggregate expression to emit");
   assert((Slot.getAddress().isValid() || Slot.isIgnored()) &&
@@ -1756,6 +1756,11 @@ void CodeGenFunction::EmitAggExpr(const Expr *E, AggValueSlot Slot) {
   CheckAggExprForMemSetUse(Slot, E, *this);
 
   AggExprEmitter(*this, Slot, Slot.isIgnored()).Visit(const_cast<Expr *>(E));
+}
+
+void CodeGenFunction::EmitAggExpr(const Expr *E, AggValueSlot Slot) {
+  EmitAggExprHelper(E, Slot);
+  EmitAliasCall(E);
 }
 
 LValue CodeGenFunction::EmitAggExprToLValue(const Expr *E) {

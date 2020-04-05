@@ -61,6 +61,8 @@ static bool shouldEmitLifetimeMarkers(const CodeGenOptions &CGOpts,
   return CGOpts.OptimizationLevel != 0;
 }
 
+int CodeGenFunction::uniquePredicateCount = 0;
+
 CodeGenFunction::CodeGenFunction(CodeGenModule &cgm, bool suppressNewContext)
     : CodeGenTypeCache(cgm), CGM(cgm), Target(cgm.getTarget()),
       Builder(cgm, cgm.getModule().getContext(), llvm::ConstantFolder(),

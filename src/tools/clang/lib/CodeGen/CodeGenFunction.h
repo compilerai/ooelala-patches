@@ -3301,6 +3301,7 @@ public:
   /// an LLVM type of the same size of the lvalue's type.  If the lvalue has a
   /// variable length type, this is not possible.
   ///
+  LValue EmitLValueHelper(const Expr *E);
   LValue EmitLValue(const Expr *E);
 
   /// Same as EmitLValue but additionally we generate checking code to
@@ -3548,6 +3549,8 @@ public:
                   ReturnValueSlot ReturnValue, llvm::Value *Chain = nullptr);
   RValue EmitCallExpr(const CallExpr *E,
                       ReturnValueSlot ReturnValue = ReturnValueSlot());
+  RValue EmitCallExprHelper(const CallExpr *E,
+                            ReturnValueSlot ReturnValue = ReturnValueSlot());
   RValue EmitSimpleCallExpr(const CallExpr *E, ReturnValueSlot ReturnValue);
   CGCallee EmitCallee(const Expr *E);
 
@@ -3809,8 +3812,16 @@ public:
 
   // Expressions are broken into three classes: scalar, complex, aggregate.
 
+  // Keeps a count of the predicated emitted
+  static int uniquePredicateCount;
+
+  /// Emit alias predicates as a function call
+  void EmitAliasCall(LOCN_TYPE loc);
+
   /// EmitScalarExpr - Emit the computation of the specified expression of LLVM
   /// scalar type, returning the result.
+  llvm::Value *EmitScalarExprHelper(const Expr *E,
+                                    bool IgnoreResultAssign = false);
   llvm::Value *EmitScalarExpr(const Expr *E, bool IgnoreResultAssign = false);
 
   /// Emit a conversion from the specified type to the specified destination
@@ -3827,6 +3838,7 @@ public:
   /// EmitAggExpr - Emit the computation of the specified expression
   /// of aggregate type.  The result is computed into the given slot,
   /// which may be null to indicate that the value is not needed.
+  void EmitAggExprHelper(const Expr *E, AggValueSlot AS);
   void EmitAggExpr(const Expr *E, AggValueSlot AS);
 
   /// EmitAggExprToLValue - Emit the computation of the specified expression of
@@ -3839,11 +3851,14 @@ public:
 
   /// EmitComplexExpr - Emit the computation of the specified expression of
   /// complex type, returning the result.
+  ComplexPairTy EmitComplexExprHelper(const Expr *E, bool IgnoreReal = false,
+                                      bool IgnoreImag = false);
   ComplexPairTy EmitComplexExpr(const Expr *E, bool IgnoreReal = false,
                                 bool IgnoreImag = false);
 
   /// EmitComplexExprIntoLValue - Emit the given expression of complex
   /// type and place its result into the specified l-value.
+  void EmitComplexExprIntoLValueHelper(const Expr *E, LValue dest, bool isInit);
   void EmitComplexExprIntoLValue(const Expr *E, LValue dest, bool isInit);
 
   /// EmitStoreOfComplex - Store a complex number into the specified l-value.

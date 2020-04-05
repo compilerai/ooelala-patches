@@ -1086,8 +1086,9 @@ ComplexPairTy ComplexExprEmitter::VisitVAArgExpr(VAArgExpr *E) {
 
 /// EmitComplexExpr - Emit the computation of the specified expression of
 /// complex type, ignoring the result.
-ComplexPairTy CodeGenFunction::EmitComplexExpr(const Expr *E, bool IgnoreReal,
-                                               bool IgnoreImag) {
+ComplexPairTy CodeGenFunction::EmitComplexExprHelper(const Expr *E,
+                                                     bool IgnoreReal,
+                                                     bool IgnoreImag) {
   assert(E && getComplexType(E->getType()) &&
          "Invalid complex expression to emit");
 
@@ -1095,13 +1096,27 @@ ComplexPairTy CodeGenFunction::EmitComplexExpr(const Expr *E, bool IgnoreReal,
       .Visit(const_cast<Expr *>(E));
 }
 
-void CodeGenFunction::EmitComplexExprIntoLValue(const Expr *E, LValue dest,
-                                                bool isInit) {
+ComplexPairTy CodeGenFunction::EmitComplexExpr(const Expr *E, bool IgnoreReal,
+                                               bool IgnoreImag) {
+  ComplexPairTy val = EmitComplexExprHelper(E, IgnoreReal, IgnoreImag);
+  EmitAliasCall(E);
+  return val;
+}
+
+void CodeGenFunction::EmitComplexExprIntoLValueHelper(const Expr *E,
+                                                      LValue dest,
+                                                      bool isInit) {
   assert(E && getComplexType(E->getType()) &&
          "Invalid complex expression to emit");
   ComplexExprEmitter Emitter(*this);
   ComplexPairTy Val = Emitter.Visit(const_cast<Expr *>(E));
   Emitter.EmitStoreOfComplex(Val, dest, isInit);
+}
+
+void CodeGenFunction::EmitComplexExprIntoLValue(const Expr *E, LValue dest,
+                                                bool isInit) {
+  EmitComplexExprIntoLValueHelper(E, dest, isInit);
+  EmitAliasCall(E);
 }
 
 /// EmitStoreOfComplex - Store a complex number into the specified l-value.
