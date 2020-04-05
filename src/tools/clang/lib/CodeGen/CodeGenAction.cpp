@@ -42,10 +42,23 @@
 #include "llvm/Transforms/IPO/Internalize.h"
 
 #include <memory>
+#include <string>
 using namespace clang;
 using namespace llvm;
 
 namespace clang {
+std::string getFileNameFromPath(std::string path) {
+  std::reverse(path.begin(), path.end());
+  std::string filename = path;
+
+  auto pos = path.find("/");
+  if (pos != std::string::npos)
+    filename = path.substr(0, pos);
+
+  std::reverse(filename.begin(), filename.end());
+  return filename;
+}
+
 class BackendConsumer;
 class ClangDiagnosticHandler final : public DiagnosticHandler {
 public:
@@ -116,15 +129,24 @@ public:
                   bool TimePasses, const std::string &InFile,
                   SmallVector<LinkModule, 4> LinkModules,
                   std::unique_ptr<raw_pwrite_stream> OS, LLVMContext &C,
-                  CoverageSourceInfo *CoverageInfo = nullptr)
+                  CoverageSourceInfo *CoverageInfo = nullptr,
+                  PREDICATE_MAP *predicateMap = nullptr)
       : Diags(Diags), Action(Action), HeaderSearchOpts(HeaderSearchOpts),
         CodeGenOpts(CodeGenOpts), TargetOpts(TargetOpts), LangOpts(LangOpts),
         AsmOutStream(std::move(OS)), Context(nullptr),
         LLVMIRGeneration("irgen", "LLVM IR Generation Time"),
-        LLVMIRGenerationRefCount(0),
-        Gen(CreateLLVMCodeGen(Diags, InFile, HeaderSearchOpts, PPOpts,
-                              CodeGenOpts, C, CoverageInfo)),
+        LLVMIRGenerationRefCount(0), Gen(nullptr),
         LinkModules(std::move(LinkModules)) {
+    if (CodeGenOpts.SanitizeRecover.has(SanitizerKind::UnsequencedScalars)) {
+      std::string outFileForLL = getFileNameFromPath(InFile) + ".ll";
+      Gen = std::unique_ptr<CodeGenerator>(CreateUnseqLLVMCodeGen(
+          Diags, InFile, HeaderSearchOpts, PPOpts, CodeGenOpts, C, predicateMap,
+          true, outFileForLL, CoverageInfo));
+    } else {
+      Gen = std::unique_ptr<CodeGenerator>(
+          CreateLLVMCodeGen(Diags, InFile, HeaderSearchOpts, PPOpts,
+                            CodeGenOpts, C, CoverageInfo));
+    }
     FrontendTimesIsEnabled = TimePasses;
     llvm::TimePassesIsEnabled = TimePasses;
   }
@@ -217,7 +239,7 @@ public:
         Err = Linker::linkModules(*getModule(), std::move(LM.Module),
                                   LM.LinkFlags);
       }
-
+      
       if (Err)
         return true;
     }
@@ -364,7 +386,7 @@ public:
 };
 
 void BackendConsumer::anchor() {}
-} // namespace clang
+}
 
 bool ClangDiagnosticHandler::handleDiagnostics(const DiagnosticInfo &DI) {
   BackendCon->DiagnosticHandlerImpl(DI);
@@ -572,8 +594,8 @@ const FullSourceLoc BackendConsumer::getBestLocationFromDebugLoc(
     // back to a SourceLocation, at least emit a note stating that
     // we could not translate this location. This can happen in the
     // case of #line directives.
-    Diags.Report(Loc, diag::note_fe_backend_invalid_loc)
-        << Filename << Line << Column;
+    Diags.Report(Loc, diag::note_fe_backend_invalid_loc) << Filename << Line
+                                                         << Column;
 
   return Loc;
 }
@@ -596,8 +618,8 @@ void BackendConsumer::UnsupportedDiagHandler(
     // back to a SourceLocation, at least emit a note stating that
     // we could not translate this location. This can happen in the
     // case of #line directives.
-    Diags.Report(Loc, diag::note_fe_backend_invalid_loc)
-        << Filename << Line << Column;
+    Diags.Report(Loc, diag::note_fe_backend_invalid_loc) << Filename << Line
+                                                         << Column;
 }
 
 void BackendConsumer::EmitOptimizationMessage(
@@ -626,8 +648,8 @@ void BackendConsumer::EmitOptimizationMessage(
     // back to a SourceLocation, at least emit a note stating that
     // we could not translate this location. This can happen in the
     // case of #line directives.
-    Diags.Report(Loc, diag::note_fe_backend_invalid_loc)
-        << Filename << Line << Column;
+    Diags.Report(Loc, diag::note_fe_backend_invalid_loc) << Filename << Line
+                                                         << Column;
 }
 
 void BackendConsumer::OptimizationRemarkHandler(
@@ -890,7 +912,8 @@ CodeGenAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
       BA, CI.getDiagnostics(), CI.getHeaderSearchOpts(),
       CI.getPreprocessorOpts(), CI.getCodeGenOpts(), CI.getTargetOpts(),
       CI.getLangOpts(), CI.getFrontendOpts().ShowTimers, InFile,
-      std::move(LinkModules), std::move(OS), *VMContext, CoverageInfo));
+      std::move(LinkModules), std::move(OS), *VMContext, CoverageInfo,
+      CI.hasPredicateMap() ? CI.getPredicateMap() : nullptr));
   BEConsumer = Result.get();
 
   // Enable generating macro debug info only when debug info is not disabled and

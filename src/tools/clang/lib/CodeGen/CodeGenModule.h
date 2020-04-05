@@ -100,6 +100,13 @@ enum ForDefinition_t : bool {
   ForDefinition = true
 };
 
+// For unsequenced alias analysis
+typedef std::vector<Expr*> PREDICATE;
+typedef const Expr *LOCN_TYPE;
+typedef llvm::DenseMap<LOCN_TYPE, std::set<PREDICATE>> PREDICATE_MAP;
+typedef llvm::DenseMap<const Expr*, LValue> LVALUE_MAP;
+typedef llvm::DenseMap<const Expr*, RValue> RVALUE_MAP;
+
 struct OrderGlobalInits {
   unsigned int priority;
   unsigned int lex_order;
@@ -475,6 +482,18 @@ private:
   /// Objective-C's for..in loop.
   QualType ObjCFastEnumerationStateType;
 
+  /// Map of alias predicates
+  PREDICATE_MAP *predicateMap;
+
+  // Emit __not_alias calls with IR
+  bool emitPredicates;
+
+  // Map of Expr to LValues
+  LVALUE_MAP ExprLValueMap;
+
+  // Map of Expr to RValues
+  RVALUE_MAP CallRValueMap;
+
   /// @}
 
   /// Lazily create the Objective-C runtime
@@ -552,9 +571,26 @@ public:
   /// Return true if we should emit location information for expressions.
   bool getExpressionLocationsEnabled() const;
 
+  bool hasPredicateMap() { return predicateMap != nullptr; }
+
+  PREDICATE_MAP &getPredicateMap() { return *predicateMap; }
+
+  void setPredicateMap(PREDICATE_MAP *pm) { predicateMap = pm; }
+
+  bool checkEmitPredicates() { return emitPredicates; }
+
+  void setEmitPredicates(bool emitPredicatestoIR) {
+    emitPredicates = emitPredicatestoIR;
+  }
+
+  LVALUE_MAP &getExprLValueMap() { return ExprLValueMap; }
+
+  RVALUE_MAP &getCallRValueMap() { return CallRValueMap; }
+
   /// Return a reference to the configured Objective-C runtime.
   CGObjCRuntime &getObjCRuntime() {
-    if (!ObjCRuntime) createObjCRuntime();
+    if (!ObjCRuntime)
+      createObjCRuntime();
     return *ObjCRuntime;
   }
 

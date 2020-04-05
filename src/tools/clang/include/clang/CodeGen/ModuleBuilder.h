@@ -15,28 +15,42 @@
 #define LLVM_CLANG_CODEGEN_MODULEBUILDER_H
 
 #include "clang/AST/ASTConsumer.h"
+#include "clang/AST/Expr.h"
+
+#include "llvm/ADT/DenseMap.h"
+
+#include <set>
+#include <string>
 
 namespace llvm {
-  class Constant;
-  class LLVMContext;
-  class Module;
-  class StringRef;
+class Constant;
+class LLVMContext;
+class Module;
+class StringRef;
 }
 
 namespace clang {
-  class CodeGenOptions;
-  class CoverageSourceInfo;
-  class Decl;
-  class DiagnosticsEngine;
-  class GlobalDecl;
-  class HeaderSearchOptions;
-  class LangOptions;
-  class PreprocessorOptions;
+class CodeGenOptions;
+class CoverageSourceInfo;
+class Decl;
+class DiagnosticsEngine;
+class Expr;
+class GlobalDecl;
+class HeaderSearchOptions;
+class LangOptions;
+class PreprocessorOptions;
 
 namespace CodeGen {
-  class CodeGenModule;
-  class CGDebugInfo;
+class CodeGenModule;
+class CGDebugInfo;
+class LValue;
 }
+
+// For unsequenced alias analysis
+typedef std::vector<clang::Expr *> PREDICATE;
+typedef const clang::Expr *LOCN_TYPE;
+typedef llvm::DenseMap<LOCN_TYPE, std::set<PREDICATE>> PREDICATE_MAP;
+typedef llvm::DenseMap<const clang::Expr *, clang::CodeGen::LValue> LVALUE_MAP;
 
 /// The primary public interface to the Clang code generator.
 ///
@@ -87,7 +101,7 @@ public:
 
   /// Create a new \c llvm::Module after calling HandleTranslationUnit. This
   /// enable codegen in interactive processing environments.
-  llvm::Module* StartModule(llvm::StringRef ModuleName, llvm::LLVMContext &C);
+  llvm::Module *StartModule(llvm::StringRef ModuleName, llvm::LLVMContext &C);
 };
 
 /// CreateLLVMCodeGen - Create a CodeGenerator instance.
@@ -98,9 +112,16 @@ CodeGenerator *CreateLLVMCodeGen(DiagnosticsEngine &Diags,
                                  const HeaderSearchOptions &HeaderSearchOpts,
                                  const PreprocessorOptions &PreprocessorOpts,
                                  const CodeGenOptions &CGO,
-                                 llvm::LLVMContext& C,
+                                 llvm::LLVMContext &C,
                                  CoverageSourceInfo *CoverageInfo = nullptr);
 
-} // end namespace clang
+CodeGenerator *CreateUnseqLLVMCodeGen(
+    DiagnosticsEngine &Diags, const std::string &ModuleName,
+    const HeaderSearchOptions &HSO, const PreprocessorOptions &PPO,
+    const CodeGenOptions &CGO, llvm::LLVMContext &C,
+    PREDICATE_MAP *predicateMap, bool emitPredicates, std::string OutFileName,
+    CoverageSourceInfo *CoverageInfo);
+}
+// end namespace clang
 
 #endif

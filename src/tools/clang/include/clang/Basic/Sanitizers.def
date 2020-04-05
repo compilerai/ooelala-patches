@@ -94,6 +94,7 @@ SANITIZER("shift-exponent", ShiftExponent)
 SANITIZER_GROUP("shift", Shift, ShiftBase | ShiftExponent)
 SANITIZER("signed-integer-overflow", SignedIntegerOverflow)
 SANITIZER("unreachable", Unreachable)
+SANITIZER("unseq-scalars", UnsequencedScalars)
 SANITIZER("vla-bound", VLABound)
 SANITIZER("vptr", Vptr)
 

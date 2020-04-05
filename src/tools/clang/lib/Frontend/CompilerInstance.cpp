@@ -62,6 +62,7 @@ CompilerInstance::CompilerInstance(
     : ModuleLoader(/* BuildingModule = */ SharedPCMCache),
       Invocation(new CompilerInvocation()),
       PCMCache(SharedPCMCache ? SharedPCMCache : new MemoryBufferCache),
+      PredMap(nullptr),
       ThePCHContainerOperations(std::move(PCHContainerOps)) {
   // Don't allow this to invalidate buffers in use by others.
   if (SharedPCMCache)

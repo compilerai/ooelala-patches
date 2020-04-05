@@ -148,10 +148,6 @@ Module *FrontendAction::getCurrentModule() const {
 std::unique_ptr<ASTConsumer>
 FrontendAction::CreateWrappedASTConsumer(CompilerInstance &CI,
                                          StringRef InFile) {
-  std::unique_ptr<ASTConsumer> Consumer = CreateASTConsumer(CI, InFile);
-  if (!Consumer)
-    return nullptr;
-
   // Validate -add-plugin args.
   bool FoundAllPlugins = true;
   for (const std::string &Arg : CI.getFrontendOpts().AddPluginActions) {
@@ -169,14 +165,6 @@ FrontendAction::CreateWrappedASTConsumer(CompilerInstance &CI,
   }
   if (!FoundAllPlugins)
     return nullptr;
-
-  // If there are no registered plugins we don't need to wrap the consumer
-  if (FrontendPluginRegistry::begin() == FrontendPluginRegistry::end())
-    return Consumer;
-
-  // If this is a code completion run, avoid invoking the plugin consumers
-  if (CI.hasCodeCompletionConsumer())
-    return Consumer;
 
   // Collect the list of plugins that go before the main action (in Consumers)
   // or after it (in AfterConsumers)
@@ -209,6 +197,25 @@ FrontendAction::CreateWrappedASTConsumer(CompilerInstance &CI,
       }
     }
   }
+
+  // TODO: Check if this ordering works or not
+  /*
+   * This has been done as the UnsequencedAliasVistor plugin sets the 
+   * predicate map which is subsequently used in the main CodeGenAction
+   * to check if the unsequenced alias codegen consumer needs to be called
+   * or the regular one
+   */
+  std::unique_ptr<ASTConsumer> Consumer = CreateASTConsumer(CI, InFile);
+  if (!Consumer)
+    return nullptr;
+
+  // If there are no registered plugins we don't need to wrap the consumer
+  if (FrontendPluginRegistry::begin() == FrontendPluginRegistry::end())
+    return Consumer;
+
+  // If this is a code completion run, avoid invoking the plugin consumers
+  if (CI.hasCodeCompletionConsumer())
+    return Consumer;
 
   // Add to Consumers the main consumer, then all the plugins that go after it
   Consumers.push_back(std::move(Consumer));

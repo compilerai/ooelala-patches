@@ -37,6 +37,10 @@ class CodeGeneratorImpl : public CodeGenerator {
   const PreprocessorOptions &PreprocessorOpts; // Only used for debug info.
   const CodeGenOptions CodeGenOpts;            // Intentionally copied in.
 
+  std::string OutFileName_;
+  PREDICATE_MAP *predicateMap_;
+  bool emitPredicatestoIR;
+
   unsigned HandlingTopLevelDecls;
 
   /// Use this when emitting decls to block re-entrant decl emission. It will
@@ -67,13 +71,28 @@ private:
 
 public:
   CodeGeneratorImpl(DiagnosticsEngine &diags, llvm::StringRef ModuleName,
+                      const HeaderSearchOptions &HSO,
+                      const PreprocessorOptions &PPO, const CodeGenOptions &CGO,
+                      llvm::LLVMContext &C,
+                      CoverageSourceInfo *CoverageInfo = nullptr)
+      : Diags(diags), Ctx(nullptr), HeaderSearchOpts(HSO),
+        PreprocessorOpts(PPO), CodeGenOpts(CGO), OutFileName_(""),
+	    predicateMap_(nullptr), emitPredicatestoIR(false), HandlingTopLevelDecls(0),
+        CoverageInfo(CoverageInfo), M(new llvm::Module(ModuleName, C)) {
+    C.setDiscardValueNames(CGO.DiscardValueNames);
+  }
+
+  CodeGeneratorImpl(DiagnosticsEngine &diags, const std::string &ModuleName,
                     const HeaderSearchOptions &HSO,
                     const PreprocessorOptions &PPO, const CodeGenOptions &CGO,
-                    llvm::LLVMContext &C,
+                    llvm::LLVMContext &C, PREDICATE_MAP *predicateMap,
+                    bool emitPredicates, std::string OutFileName,
                     CoverageSourceInfo *CoverageInfo = nullptr)
       : Diags(diags), Ctx(nullptr), HeaderSearchOpts(HSO),
-        PreprocessorOpts(PPO), CodeGenOpts(CGO), HandlingTopLevelDecls(0),
-        CoverageInfo(CoverageInfo), M(new llvm::Module(ModuleName, C)) {
+        PreprocessorOpts(PPO), CodeGenOpts(CGO), OutFileName_(OutFileName),
+        predicateMap_(predicateMap), emitPredicatestoIR(emitPredicates),
+        HandlingTopLevelDecls(0), CoverageInfo(CoverageInfo),
+        M(new llvm::Module(ModuleName, C)) {
     C.setDiscardValueNames(CGO.DiscardValueNames);
   }
 
@@ -127,6 +146,9 @@ public:
     Builder.reset(new CodeGen::CodeGenModule(Context, HeaderSearchOpts,
                                              PreprocessorOpts, CodeGenOpts, *M,
                                              Diags, CoverageInfo));
+
+    Builder->setPredicateMap(predicateMap_);
+    Builder->setEmitPredicates(emitPredicatestoIR);
 
     for (auto &&Lib : CodeGenOpts.DependentLibraries)
       Builder->AddDependentLib(Lib);
@@ -276,7 +298,7 @@ public:
     Builder->EmitVTable(RD);
   }
 };
-} // namespace
+}
 
 void CodeGenerator::anchor() {}
 
@@ -319,4 +341,15 @@ clang::CreateLLVMCodeGen(DiagnosticsEngine &Diags, llvm::StringRef ModuleName,
                          CoverageSourceInfo *CoverageInfo) {
   return new CodeGeneratorImpl(Diags, ModuleName, HeaderSearchOpts,
                                PreprocessorOpts, CGO, C, CoverageInfo);
+}
+
+CodeGenerator *clang::CreateUnseqLLVMCodeGen(
+    DiagnosticsEngine &Diags, const std::string &ModuleName,
+    const HeaderSearchOptions &HSO, const PreprocessorOptions &PPO,
+    const CodeGenOptions &CGO, llvm::LLVMContext &C,
+    PREDICATE_MAP *predicateMap, bool emitPredicates, std::string OutFileName,
+    CoverageSourceInfo *CoverageInfo) {
+  return new CodeGeneratorImpl(Diags, ModuleName, HSO, PPO, CGO, C,
+                               predicateMap, emitPredicates, OutFileName,
+                               CoverageInfo);
 }

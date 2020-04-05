@@ -96,7 +96,8 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
       PreprocessorOpts(PPO), CodeGenOpts(CGO), TheModule(M), Diags(diags),
       Target(C.getTargetInfo()), ABI(createCXXABI(*this)),
       VMContext(M.getContext()), Types(*this), VTables(*this),
-      SanitizerMD(new SanitizerMetadata(*this)) {
+      SanitizerMD(new SanitizerMetadata(*this)), predicateMap(nullptr),
+      emitPredicates(false) {
 
   // Initialize the type cache.
   llvm::LLVMContext &LLVMContext = M.getContext();
@@ -315,7 +316,7 @@ void CodeGenModule::checkAliases() {
       Diags.Report(Location, diag::err_cyclic_alias) << IsIFunc;
     } else if (GV->isDeclaration()) {
       Error = true;
-      Diags.Report(Location, diag::err_alias_to_undefined)
+      Diags.Report(Location, diag::err_alias_to_undefined) 
           << IsIFunc << IsIFunc;
     } else if (IsIFunc) {
       // Check resolver function type.
@@ -383,7 +384,7 @@ void InstrProfStats::reportDiagnostics(DiagnosticsEngine &Diags,
     Diags.Report(diag::warn_profile_data_unprofiled) << MainFile;
   } else {
     if (Mismatched > 0)
-      Diags.Report(diag::warn_profile_data_out_of_date)
+      Diags.Report(diag::warn_profile_data_out_of_date) 
           << Visited << Mismatched;
 
     if (Missing > 0)
@@ -4855,7 +4856,7 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
       if (isa<VarDecl>(I) || isa<CXXRecordDecl>(I))
         EmitTopLevelDecl(I);
     break;
-    // No code generation needed.
+  // No code generation needed.
   case Decl::UsingShadow:
   case Decl::ClassTemplate:
   case Decl::VarTemplate:

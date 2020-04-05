@@ -11,6 +11,7 @@
 #define LLVM_CLANG_FRONTEND_COMPILERINSTANCE_H_
 
 #include "clang/AST/ASTConsumer.h"
+#include "clang/AST/Expr.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInvocation.h"
@@ -26,6 +27,7 @@
 #include <cassert>
 #include <list>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -51,6 +53,10 @@ class Preprocessor;
 class Sema;
 class SourceManager;
 class TargetInfo;
+
+typedef std::vector<clang::Expr*> PREDICATE;
+typedef const clang::Expr* LOCN_TYPE;
+typedef llvm::DenseMap<LOCN_TYPE, std::set<PREDICATE>> PREDICATE_MAP;
 
 /// CompilerInstance - Helper class for managing a single instance of the Clang
 /// compiler.
@@ -112,6 +118,9 @@ class CompilerInstance : public ModuleLoader {
 
   /// The semantic analysis object.
   std::unique_ptr<Sema> TheSema;
+
+  /// The object to store predicate map
+  std::unique_ptr<PREDICATE_MAP> PredMap = nullptr;
 
   /// The frontend timer group.
   std::unique_ptr<llvm::TimerGroup> FrontendTimerGroup;
@@ -354,6 +363,20 @@ public:
     assert(Diagnostics && Diagnostics->getClient() &&
            "Compiler instance has no diagnostic client!");
     return *Diagnostics->getClient();
+  }
+
+  /// }
+  /// @name Predicate Map
+  /// {
+
+  bool hasPredicateMap() const {return PredMap != nullptr; }
+
+  PREDICATE_MAP *getPredicateMap() {
+    return PredMap.get();
+  }
+
+  void createPredicateMap() {
+    PredMap = std::unique_ptr<PREDICATE_MAP>(new PREDICATE_MAP());
   }
 
   /// }
